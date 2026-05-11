@@ -27,102 +27,65 @@ COLOR_FLEX1     = "#bfdbfe"   # blue-200
 COLOR_FLEX2     = "#60a5fa"   # blue-400
 COLOR_FLEX3     = "#1d4ed8"   # blue-700
 
-# ── Global CSS ────────────────────────────────────────────────────────────────
-st.markdown(f"""
+# ── Global CSS — use st.html() so the <style> tag isn't markdown-parsed ──────
+_CSS = """
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  html, body, [class*="css"], .stApp {{
+  html, body, [class*="css"], .stApp {
       font-family: 'Inter', -apple-system, sans-serif;
-      color: {COLOR_INK};
-  }}
-  #MainMenu, footer, header {{visibility: hidden;}}
-  .block-container {{padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}}
+      color: #0f172a;
+  }
+  #MainMenu, footer, header {visibility: hidden;}
+  .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}
 
-  h1 {{font-size: 28px !important; font-weight: 700; letter-spacing: -0.02em; color: {COLOR_INK};}}
-  h2 {{font-size: 20px !important; font-weight: 600; letter-spacing: -0.01em; color: {COLOR_INK}; margin-top: 1.5rem;}}
-  h3 {{font-size: 14px !important; font-weight: 600; text-transform: uppercase;
-       letter-spacing: 0.08em; color: {COLOR_MUTED}; margin-top: 1rem;}}
-  p, label, span, div {{font-size: 14px;}}
+  h1 {font-size: 28px !important; font-weight: 700; letter-spacing: -0.02em; color: #0f172a;}
+  h2 {font-size: 20px !important; font-weight: 600; letter-spacing: -0.01em; color: #0f172a; margin-top: 1.5rem;}
+  h3 {font-size: 14px !important; font-weight: 600; text-transform: uppercase;
+       letter-spacing: 0.08em; color: #64748b; margin-top: 1rem;}
+  p, label, span, div {font-size: 14px;}
 
-  /* KPI card */
-  .kpi {{
-      background: {COLOR_BG};
-      border: 1px solid {COLOR_BORDER};
+  .kpi {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
       border-radius: 8px;
       padding: 16px 20px;
       height: 100%;
-  }}
-  .kpi-label {{
-      font-size: 11px;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: {COLOR_MUTED};
-      margin-bottom: 6px;
-  }}
-  .kpi-value {{
-      font-size: 32px;
-      font-weight: 700;
-      color: {COLOR_INK};
-      line-height: 1.1;
-      letter-spacing: -0.02em;
-  }}
-  .kpi-unit {{
-      font-size: 13px;
-      font-weight: 500;
-      color: {COLOR_MUTED};
-      margin-left: 4px;
-  }}
-  .kpi-delta-pos {{
-      font-size: 12px;
-      font-weight: 600;
-      color: {COLOR_GREEN};
-      margin-top: 6px;
-  }}
-  .kpi-delta-neg {{
-      font-size: 12px;
-      font-weight: 600;
-      color: {COLOR_ACCENT};
-      margin-top: 6px;
-  }}
+  }
+  .kpi-label {
+      font-size: 11px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #64748b; margin-bottom: 6px;
+  }
+  .kpi-value {
+      font-size: 32px; font-weight: 700; color: #0f172a;
+      line-height: 1.1; letter-spacing: -0.02em;
+  }
+  .kpi-unit {font-size: 13px; font-weight: 500; color: #64748b; margin-left: 4px;}
+  .kpi-delta-pos {font-size: 12px; font-weight: 600; color: #10b981; margin-top: 6px;}
+  .kpi-delta-neg {font-size: 12px; font-weight: 600; color: #2563eb; margin-top: 6px;}
 
-  /* Tabs */
-  .stTabs [data-baseweb="tab-list"] {{gap: 0; border-bottom: 1px solid {COLOR_BORDER};}}
-  .stTabs [data-baseweb="tab"] {{
-      padding: 12px 18px;
-      font-weight: 500;
-      color: {COLOR_MUTED};
-      background: transparent;
-  }}
-  .stTabs [aria-selected="true"] {{color: {COLOR_INK}; border-bottom: 2px solid {COLOR_ACCENT};}}
+  .stTabs [data-baseweb="tab-list"] {gap: 0; border-bottom: 1px solid #e2e8f0;}
+  .stTabs [data-baseweb="tab"] {padding: 12px 18px; font-weight: 500; color: #64748b; background: transparent;}
+  .stTabs [aria-selected="true"] {color: #0f172a; border-bottom: 2px solid #2563eb;}
 
-  /* Streamlit metric override (when we still use it) */
-  [data-testid="stMetricValue"] {{font-size: 28px; font-weight: 700;}}
-  [data-testid="stMetricLabel"] {{font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: {COLOR_MUTED};}}
+  [data-testid="stMetricValue"] {font-size: 28px; font-weight: 700;}
+  [data-testid="stMetricLabel"] {font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b;}
 
-  /* Sidebar */
-  section[data-testid="stSidebar"] {{background: white; border-right: 1px solid {COLOR_BORDER};}}
+  section[data-testid="stSidebar"] {background: white; border-right: 1px solid #e2e8f0;}
 
-  /* Button */
-  .stButton button {{
-      border-radius: 6px;
-      font-weight: 500;
-      border: 1px solid {COLOR_BORDER};
-  }}
-  .stButton button[kind="primary"] {{
-      background: {COLOR_INK};
-      border-color: {COLOR_INK};
-      color: white;
-  }}
-  .stButton button[kind="primary"]:hover {{background: #1e293b; border-color: #1e293b;}}
+  .stButton button {border-radius: 6px; font-weight: 500; border: 1px solid #e2e8f0;}
+  .stButton button[kind="primary"] {background: #0f172a; border-color: #0f172a; color: white;}
+  .stButton button[kind="primary"]:hover {background: #1e293b; border-color: #1e293b;}
 
-  /* Dataframe */
-  [data-testid="stDataFrame"] {{border: 1px solid {COLOR_BORDER}; border-radius: 6px;}}
-
-  /* Hide colored alert backgrounds — use neutral */
-  .stAlert {{background: {COLOR_BG} !important; border: 1px solid {COLOR_BORDER} !important;}}
+  [data-testid="stDataFrame"] {border: 1px solid #e2e8f0; border-radius: 6px;}
+  .stAlert {background: #f8fafc !important; border: 1px solid #e2e8f0 !important;}
 </style>
-""", unsafe_allow_html=True)
+"""
+# Prefer st.html() (1.32+); fall back to markdown unsafe-HTML
+if hasattr(st, "html"):
+    st.html(_CSS)
+else:
+    st.markdown(_CSS, unsafe_allow_html=True)
 
 # ── Load assets ───────────────────────────────────────────────────────────────
 @st.cache_data
@@ -223,6 +186,17 @@ PLOTLY_LAYOUT = dict(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
                 font=dict(size=11)),
 )
+
+def apply_layout(fig, **overrides):
+    """Apply PLOTLY_LAYOUT then merge overrides (deep-merging dict values like xaxis/yaxis)."""
+    merged = {k: (dict(v) if isinstance(v, dict) else v) for k, v in PLOTLY_LAYOUT.items()}
+    for k, v in overrides.items():
+        if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
+            merged[k] = {**merged[k], **v}
+        else:
+            merged[k] = v
+    fig.update_layout(**merged)
+    return fig
 
 # ── Session state ─────────────────────────────────────────────────────────────
 MAX_BIN = len(ts) - N_FORECAST - 10
@@ -424,10 +398,10 @@ if mode.startswith("Advisor"):
         ))
         # Now line
         fig.add_vline(x=0, line_width=1, line_dash="dot", line_color=COLOR_MUTED)
-        fig.update_layout(**PLOTLY_LAYOUT, height=320,
-                          yaxis_title="Flex capacity (MW)",
-                          xaxis_title="Hours from now",
-                          xaxis=dict(range=[-24, 8], gridcolor=COLOR_BORDER))
+        apply_layout(fig, height=320,
+                     yaxis_title="Flex capacity (MW)",
+                     xaxis_title="Hours from now",
+                     xaxis=dict(range=[-24, 8]))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # ── Right: LMP forecast with windows ────────────────────────────────────
@@ -458,8 +432,8 @@ if mode.startswith("Advisor"):
                           fillcolor=COLOR_ACCENT, opacity=0.18, line_width=0,
                           annotation_text="recommended", annotation_position="top right",
                           annotation_font_size=10, annotation_font_color=COLOR_ACCENT)
-        fig.update_layout(**PLOTLY_LAYOUT, height=320,
-                          yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
+        apply_layout(fig, height=320,
+                     yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -583,11 +557,11 @@ else:
                         "savings": ":.2f", "start_dt": False, "end_dt": False, "flex_label": False},
         )
         fig.update_yaxes(autorange="reversed")
-        fig.update_layout(**PLOTLY_LAYOUT, height=420,
-                          xaxis_title="", yaxis_title="",
-                          xaxis=dict(tickformat="%Hh", gridcolor=COLOR_BORDER),
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                      xanchor="left", x=0, title=""))
+        apply_layout(fig, height=420,
+                     xaxis_title="", yaxis_title="",
+                     xaxis=dict(tickformat="%Hh"),
+                     legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                 xanchor="left", x=0, title=""))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         # ── LMP underlay ────────────────────────────────────────────────────
@@ -603,8 +577,8 @@ else:
                 fig.add_vrect(x0=forecast_hours[i] - BIN_MIN/120,
                               x1=forecast_hours[i] + BIN_MIN/120,
                               fillcolor=COLOR_ACCENT, opacity=0.4, line_width=0)
-        fig.update_layout(**PLOTLY_LAYOUT, height=200,
-                          yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
+        apply_layout(fig, height=200,
+                     yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         # ── Dispatch table ──────────────────────────────────────────────────
