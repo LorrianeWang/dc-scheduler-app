@@ -191,57 +191,111 @@ if submit_btn:
 
     flex_level = int(flex_type[5])  # "Flex 1" → 1, etc.
 
+    # Job parameters → scheduler constraints
+    duration_bins = max(1, int(np.ceil(duration_hr * 60 / BIN_MIN)))     # e.g. 4hr → 16 bins
+    job_mw        = gpu_count * (P_MAX - P_IDLE) / 1e6                    # job's max-load power footprint
+    if flex_level == 1:
+        max_deferral_bins = 0
+    elif flex_level == 2:
+        max_deferral_bins = 8     # 2 hours
+    else:
+        max_deferral_bins = 32    # 8 hours (full forecast)
+
     if flex_level == 1:
         st.info("**Flex 1 job — submit immediately.** Real-time jobs cannot be deferred. There is no benefit to waiting.")
     else:
-        deferral_fraction = 0.5 if flex_level == 2 else 1.0
+        # For a job that runs for `duration_bins`, evaluate each possible START bin
+        # by the MEAN predicted cluster load over its full runtime → sustained low-load window
+        N_FC = len(forecast)
+        # Valid starts: 0 .. min(max_deferral, N_FC - 1)
+        max_start = min(max_deferral_bins, N_FC - 1)
+        candidate_starts = np.arange(0, max_start + 1)
 
-        # Find the best window in the next 8 hours (lowest predicted load)
-        best_step  = int(np.argmin(forecast))
-        best_delay = (best_step + 1) * BIN_MIN  # minutes
-        best_cap   = forecast[best_step]
-        now_cap    = ts["flexible_mw"].iloc[now_bin]
-        cap_gain   = best_cap - now_cap
+        # Mean predicted flexible_mw over [start, start + duration_bins)
+        window_means = []
+        for s in candidate_starts:
+            end = min(s + duration_bins, N_FC)
+            window_means.append(forecast[s:end].mean())
+        window_means = np.array(window_means)
 
-        # Power contribution of this job
-        job_mw = gpu_count * (P_MAX - P_IDLE) / 1e6
+        best_step = int(candidate_starts[np.argmin(window_means)])
+        best_delay = (best_step + 1) * BIN_MIN      # +1 because step=0 → next bin (15 min from now)
+        if best_step == 0:
+            best_delay = 0  # submit now
 
-        if best_delay == BIN_MIN:
-            st.success(f"**Submit now.** The current window is already the lowest-load period in the next 8 hours.")
-        else:
+        # Reference: avg load if we started right now
+        now_window_mean = forecast[0:min(duration_bins, N_FC)].mean()
+        best_window_mean = window_means.min()
+        load_reduction = now_window_mean - best_window_mean        # MW saved per bin (averaged over duration)
+        energy_shifted_mwh = load_reduction * duration_hr           # MW × hours = MW·h
+
+        # Recommendation banner
+        if best_delay == 0:
             st.success(
-                f"**Defer by {best_delay} minutes** (submit at "
-                f"Day {now_day}, {int((now_hour + best_delay/60) % 24):02d}:{int(((now_hour + best_delay/60) % 1)*60):02d})."
+                f"**Submit now.** Among all deferral options for a {duration_hr:.1f}-hr job "
+                f"with {flex_type.split(' — ')[0]} flexibility, the current window has the lowest sustained load."
+            )
+        else:
+            target_hour = (now_hour + best_delay / 60) % 24
+            target_hhmm = f"{int(target_hour):02d}:{int((target_hour % 1)*60):02d}"
+            st.success(
+                f"**Defer by {best_delay} minutes** (start at Day {now_day}, {target_hhmm}). "
+                f"This gives the lowest average cluster load over the job's {duration_hr:.1f}-hr runtime, "
+                f"within the {max_deferral_bins*BIN_MIN}-minute deferral budget for {flex_type.split(' — ')[0]}."
             )
 
+        # Metric row
         rc1, rc2, rc3, rc4 = st.columns(4)
-        rc1.metric("Recommended delay",    f"{best_delay} min")
-        rc2.metric("Capacity at best window", f"{best_cap:.3f} MW")
-        rc3.metric("Capacity gain vs now",  f"{cap_gain:+.3f} MW")
-        rc4.metric("Job power footprint",   f"{job_mw*1000:.1f} kW")
+        rc1.metric("Recommended delay",       f"{best_delay} min")
+        rc2.metric("Avg load if submit now",  f"{now_window_mean:.3f} MW")
+        rc3.metric("Avg load if deferred",    f"{best_window_mean:.3f} MW", delta=f"{-load_reduction:+.3f} MW")
+        rc4.metric("Energy shifted from peak", f"{energy_shifted_mwh:.3f} MW·h")
 
-        # Highlight best window on a mini-plot
-        fig2, ax = plt.subplots(figsize=(10, 3))
+        rc5, rc6, rc7 = st.columns(3)
+        rc5.metric("Job duration",          f"{duration_hr:.1f} hr ({duration_bins} bins)")
+        rc6.metric("Job power footprint",   f"{job_mw*1000:.1f} kW @ peak")
+        rc7.metric("Max allowed deferral",  f"{max_deferral_bins*BIN_MIN} min")
+
+        # Highlight best window + job span on the forecast plot
+        fig2, ax = plt.subplots(figsize=(10, 3.2))
         ax.plot(forecast_hours, forecast, color="steelblue", linewidth=1.2, label="Forecast")
         ax.fill_between(forecast_hours, forecast_lo, forecast_hi, alpha=0.2, color="steelblue")
-        ax.axvline(forecast_hours[best_step], color="green", linewidth=1.5,
-                   linestyle="--", label=f"Best window (+{best_delay} min)")
-        ax.scatter([forecast_hours[best_step]], [forecast[best_step]],
-                   color="green", zorder=5, s=60)
-        ax.axhline(now_cap, color="red", linewidth=0.8, linestyle=":", label="Current capacity")
-        ax.set_xlabel("Hours from now"); ax.set_ylabel("Flexible Capacity (MW)")
-        ax.set_title("Forecast — Optimal Submission Window")
-        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+
+        # Span of "submit now" scenario (red)
+        now_span_end = min(duration_bins, N_FC)
+        ax.axvspan(forecast_hours[0] - BIN_MIN/60, forecast_hours[now_span_end - 1],
+                   alpha=0.15, color="red", label=f"If submit now (load={now_window_mean:.3f} MW)")
+
+        # Span of "deferred" scenario (green)
+        if best_step > 0:
+            best_span_end = min(best_step + duration_bins, N_FC)
+            ax.axvspan(forecast_hours[best_step], forecast_hours[best_span_end - 1],
+                       alpha=0.25, color="green",
+                       label=f"If deferred (load={best_window_mean:.3f} MW)")
+
+        ax.set_xlabel("Hours from now")
+        ax.set_ylabel("Flexible Capacity (MW)")
+        ax.set_title(f"Optimal Window for a {duration_hr:.1f}-hr Job — {flex_type.split(' — ')[0]}")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.grid(alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig2)
         plt.close()
 
-        st.markdown(
-            f"> **Why this window?** GBM predicts flexible capacity peaks at **{best_cap:.3f} MW** "
-            f"in {best_delay} minutes — **{abs(cap_gain)*100/max(now_cap,0.001):.1f}% "
-            f"{'higher' if cap_gain > 0 else 'lower'}** than now. "
-            f"Deferring your {gpu_count}-GPU job ({job_mw*1000:.1f} kW) reduces peak cluster load during the current high-demand window."
-        )
+        if best_step == 0:
+            st.markdown(
+                f"> **Why submit now?** No future window in the next {max_deferral_bins*BIN_MIN} min has "
+                f"lower sustained load over a {duration_hr:.1f}-hr runtime. "
+                f"Your {gpu_count}-GPU job ({job_mw*1000:.1f} kW) won't reduce peak load by waiting."
+            )
+        else:
+            st.markdown(
+                f"> **Why this window?** Averaged across the full {duration_hr:.1f}-hr runtime, the cluster's "
+                f"predicted load is **{load_reduction:.3f} MW lower** in the deferred window vs starting now. "
+                f"For your {gpu_count}-GPU job, this shifts **{energy_shifted_mwh:.3f} MW·h** away from the "
+                f"current peak period — exactly the kind of load-shifting that reduces carbon intensity when "
+                f"the grid is dirtier at peak hours."
+            )
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
