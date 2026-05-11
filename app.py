@@ -35,7 +35,10 @@ _CSS = """
       font-family: 'Inter', -apple-system, sans-serif;
       color: #0f172a;
   }
-  #MainMenu, footer, header {visibility: hidden;}
+  #MainMenu, footer {visibility: hidden;}
+  /* Hide the run/stop/share toolbar but keep the header (so the sidebar collapse arrow stays clickable) */
+  [data-testid="stToolbar"] {display: none;}
+  [data-testid="stHeader"] {background: transparent;}
   .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}
 
   h1 {font-size: 28px !important; font-weight: 700; letter-spacing: -0.02em; color: #0f172a;}
