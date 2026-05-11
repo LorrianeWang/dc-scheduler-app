@@ -64,6 +64,28 @@ _CSS = """
   .kpi-delta-pos {font-size: 12px; font-weight: 600; color: #10b981; margin-top: 6px;}
   .kpi-delta-neg {font-size: 12px; font-weight: 600; color: #2563eb; margin-top: 6px;}
 
+  .action-banner {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-left: 3px solid #2563eb;
+      border-radius: 8px;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      margin-bottom: 12px;
+  }
+  .action-banner-label {
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #64748b;
+      white-space: nowrap;
+  }
+  .action-banner-value {
+      font-size: 18px; font-weight: 600; color: #0f172a;
+      letter-spacing: -0.01em;
+  }
+
   .stTabs [data-baseweb="tab-list"] {gap: 0; border-bottom: 1px solid #e2e8f0;}
   .stTabs [data-baseweb="tab"] {padding: 12px 18px; font-weight: 500; color: #64748b; background: transparent;}
   .stTabs [aria-selected="true"] {color: #0f172a; border-bottom: 2px solid #2563eb;}
@@ -173,6 +195,15 @@ def kpi_card(label, value, unit="", delta=None, delta_pos=True):
         f'<div class="kpi"><div class="kpi-label">{label}</div>'
         f'<div class="kpi-value">{value}<span class="kpi-unit">{unit}</span></div>'
         f'{delta_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+def action_banner(label, value):
+    st.markdown(
+        f'<div class="action-banner">'
+        f'<div class="action-banner-label">{label}</div>'
+        f'<div class="action-banner-value">{value}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -362,13 +393,14 @@ if mode.startswith("Advisor"):
             f"{r['gpus']} GPUs · {r['duration_hr']:.1f} hr · {r['flex_label']}"
         )
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: kpi_card("Action", rec_label, "")
-        with c2: kpi_card("Energy cost", f"${r['best_cost']:,.2f}",
+        action_banner("Action", rec_label)
+
+        c1, c2, c3 = st.columns(3)
+        with c1: kpi_card("Energy cost", f"${r['best_cost']:,.2f}",
                           delta=f"saves ${cost_save:,.2f}" if cost_save > 0.01 else None, delta_pos=True)
-        with c3: kpi_card("CO₂ emitted", f"{r['best_carb']*1000:,.1f}", "kg",
+        with c2: kpi_card("CO₂ emitted", f"{r['best_carb']*1000:,.1f}", "kg",
                           delta=f"saves {carb_save*1000:.1f} kg" if carb_save > 0.01 else None, delta_pos=True)
-        with c4: kpi_card("4CP exposure",
+        with c3: kpi_card("4CP exposure",
                           f"{int(r['fc_4cp'][r['best_step']:r['best_end']].sum())}/"
                           f"{int(r['fc_4cp'][:r['now_end']].sum())}",
                           "bins (best / now)")
