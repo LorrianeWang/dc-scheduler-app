@@ -86,6 +86,46 @@ _CSS = """
       letter-spacing: -0.01em;
   }
 
+  /* Sidebar footer link — visually distinct from radio choices */
+  .nav-link-wrap > div > button {
+      background: transparent !important;
+      border: none !important;
+      padding: 0 !important;
+      color: #64748b !important;
+      font-size: 13px !important;
+      font-weight: 500 !important;
+      text-align: left !important;
+      box-shadow: none !important;
+  }
+  .nav-link-wrap > div > button:hover {
+      color: #2563eb !important;
+      background: transparent !important;
+  }
+
+  /* Methodology page */
+  .mtd-citation {
+      font-size: 12px; color: #64748b; line-height: 1.6;
+      padding-left: 1em; text-indent: -1em;
+  }
+  .mtd-stat-table {
+      border-collapse: collapse; width: 100%;
+      font-size: 13px; margin: 12px 0 18px 0;
+  }
+  .mtd-stat-table th {
+      text-align: left; font-weight: 600; font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: #64748b; border-bottom: 1px solid #e2e8f0;
+      padding: 8px 12px;
+  }
+  .mtd-stat-table td {
+      padding: 8px 12px; border-bottom: 1px solid #f1f5f9;
+  }
+  .mtd-stat-table tr.best td {font-weight: 600; color: #0f172a;}
+  .mtd-stat-table tr.best td:first-child::before {
+      content: "● "; color: #2563eb; margin-right: 4px;
+  }
+  .mtd-stat-table tr td:first-child {color: #475569;}
+
   .stTabs [data-baseweb="tab-list"] {gap: 0; border-bottom: 1px solid #e2e8f0;}
   .stTabs [data-baseweb="tab"] {padding: 12px 18px; font-weight: 500; color: #64748b; background: transparent;}
   .stTabs [aria-selected="true"] {color: #0f172a; border-bottom: 2px solid #2563eb;}
@@ -235,6 +275,12 @@ if "now_bin" not in st.session_state:
     st.session_state.now_bin = 1440
 if "advisor_result" not in st.session_state:
     st.session_state.advisor_result = None
+if "view" not in st.session_state:
+    st.session_state.view = "app"
+
+def _on_mode_change():
+    # Any radio interaction also returns the user from methodology view
+    st.session_state.view = "app"
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.markdown("### DC Workload Scheduler")
@@ -245,30 +291,355 @@ mode = st.sidebar.radio(
     "Mode",
     ["Advisor — single job", "Planner — job queue"],
     label_visibility="visible",
+    on_change=_on_mode_change,
+    key="mode_radio",
 )
 
+# Slider + clock only shown in app view (irrelevant on methodology page)
+if st.session_state.view == "app":
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Simulated time**")
+    now_bin_input = st.sidebar.slider(
+        "Bin index", min_value=120, max_value=MAX_BIN,
+        value=st.session_state.now_bin, step=1, label_visibility="collapsed",
+    )
+    if now_bin_input != st.session_state.now_bin:
+        st.session_state.now_bin = now_bin_input
+    nb = st.session_state.now_bin
+    now_hour = nb * BIN_MIN / 60
+    day = int(now_hour // 24) + 1
+    hhmm = f"{int(now_hour % 24):02d}:{int((now_hour % 1) * 60):02d}"
+    st.sidebar.markdown(f"**Day {day}, {hhmm}**")
+    if st.sidebar.button("Reset to default", use_container_width=True):
+        st.session_state.now_bin = 1440
+        st.rerun()
+
+# Footer link — visually distinct from radio buttons
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Simulated time**")
-now_bin = st.sidebar.slider(
-    "Bin index", min_value=120, max_value=MAX_BIN,
-    value=st.session_state.now_bin, step=1, label_visibility="collapsed",
-)
-if now_bin != st.session_state.now_bin:
-    st.session_state.now_bin = now_bin
-nb = st.session_state.now_bin
-
-now_hour = nb * BIN_MIN / 60
-day = int(now_hour // 24) + 1
-hhmm = f"{int(now_hour % 24):02d}:{int((now_hour % 1) * 60):02d}"
-st.sidebar.markdown(f"**Day {day}, {hhmm}**")
-
-if st.sidebar.button("Reset to default", use_container_width=True):
-    st.session_state.now_bin = 1440
-    st.rerun()
+with st.sidebar.container():
+    st.markdown('<div class="nav-link-wrap">', unsafe_allow_html=True)
+    if st.session_state.view == "app":
+        if st.sidebar.button("Methodology & validation →", key="link_to_mtd",
+                             use_container_width=True):
+            st.session_state.view = "methodology"
+            st.rerun()
+    else:
+        if st.sidebar.button("← Back to application", key="link_to_app",
+                             use_container_width=True):
+            st.session_state.view = "app"
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("GPU Cluster Scheduler")
 st.caption("Alibaba PAI workload trace · ERCOT-calibrated LMP & carbon intensity · GBM forecasting")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Route to methodology view if requested; otherwise render the application.
+# ═════════════════════════════════════════════════════════════════════════════
+if st.session_state.view == "methodology":
+    # ── Methodology & validation page ────────────────────────────────────────
+    from sklearn.linear_model import LinearRegression as _LinReg
+
+    @st.cache_data
+    def _compute_test_predictions():
+        """Replay training pipeline on synthetic data, generate test-set predictions for live models."""
+        df = ts.copy()
+        df["hour_of_day"]       = (df["hour"] % 24).round(2)
+        df["day_of_week"]       = (df["hour"] // 24).astype(int) % 7
+        df["is_business_hours"] = ((df["hour_of_day"] >= 9) & (df["hour_of_day"] <= 18)).astype(int)
+        df["job_arrival"]       = df["total_jobs"].diff().clip(lower=0).fillna(0)
+        df["job_completion"]    = df["total_jobs"].diff().clip(upper=0).abs().fillna(0)
+        df["flex3_ratio"]       = df["flex3_jobs"] / df["total_jobs"].replace(0, 1)
+        df["flex2_ratio"]       = df["flex2_jobs"] / df["total_jobs"].replace(0, 1)
+        for lag in [1, 4, 8, 32, 96]:
+            df[f"flexible_mw_lag{lag}"] = df["flexible_mw"].shift(lag)
+            df[f"total_jobs_lag{lag}"]  = df["total_jobs"].shift(lag)
+        df["flexible_mw_roll4_mean"]  = df["flexible_mw"].rolling(4).mean()
+        df["flexible_mw_roll4_std"]   = df["flexible_mw"].rolling(4).std()
+        df["flexible_mw_roll96_mean"] = df["flexible_mw"].rolling(96).mean()
+        df["target"] = df["flexible_mw"].shift(-16)
+        df = df.dropna().reset_index(drop=True)
+        X = df[feature_cols].values
+        y = df["target"].values
+        split = int(len(df) * 0.8)
+        X_train_sc = scaler.transform(X[:split])
+        X_test_sc  = scaler.transform(X[split:])
+        y_train, y_test = y[:split], y[split:]
+
+        gbm_pred = gbr.predict(X_test_sc)
+        lr = _LinReg().fit(X_train_sc, y_train)
+        lr_pred = lr.predict(X_test_sc)
+        persistence_pred = X[split:, feature_cols.index("flexible_mw_lag1")]
+
+        hours = (df["hour"].values[split:] - df["hour"].values[split])
+        return dict(hours=hours, actual=y_test,
+                    gbm=gbm_pred, persistence=persistence_pred, linear=lr_pred)
+
+    # ─── 1. The problem ──────────────────────────────────────────────────────
+    st.markdown("## 1. The Problem")
+    st.markdown(
+        "GPU clusters now consume hundreds of megawatts at hyperscale. In Alibaba's "
+        "PAI production trace [1], approximately **50% of submitted jobs are deferrable** — "
+        "training, batch processing, and background workloads with no tight latency "
+        "requirements. The remaining ~50% (inference, real-time monitoring) cannot be moved.\n\n"
+        "In grid markets like ERCOT, deferrable load creates three monetizable opportunities:"
+    )
+    st.markdown(
+        "- **Energy arbitrage** via Locational Marginal Prices (LMPs) that swing $30 → $500+/MWh within hours\n"
+        "- **Avoidance of the Four Coincident Peaks (4CP)** [3], which set transmission charges (often 20–30% of an industrial customer's annual bill)\n"
+        "- **Demand response capacity revenue** for committing to load curtailment on signal"
+    )
+    st.markdown(
+        "This project asks: can a learned forecaster of cluster deferrable capacity, "
+        "combined with a cost- and carbon-aware scheduler, capture this value?"
+    )
+
+    # ─── 2. Data foundation ──────────────────────────────────────────────────
+    st.markdown("## 2. Data Foundation")
+    st.markdown(
+        "We use the **Alibaba PAI v2020 GPU cluster trace** [1] — 7 days, 6,500 GPUs, "
+        "91k jobs across multiple GPU SKUs (T4 / P100 / V100 / V100M32). We classify "
+        "each job into three flexibility tiers based on `task_name` and runtime:"
+    )
+    st.markdown(
+        "- **Flex 1 (0% deferrable):** `evaluator`, `TensorboardTask` — real-time monitoring\n"
+        "- **Flex 2 (50% deferrable):** `worker`, `ps`, `PyTorchWorker`, etc., with runtime < 24h — checkpointable training\n"
+        "- **Flex 3 (100% deferrable):** training jobs > 24h + batch workers — no hard deadline"
+    )
+
+    # Stacked composition chart on the synthetic 30d data
+    plot_df = ts[["hour", "flex1_jobs", "flex2_jobs", "flex3_jobs"]].iloc[:7*96]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=plot_df["hour"], y=plot_df["flex1_jobs"], stackgroup="one",
+                             name="Flex 1", fillcolor=COLOR_FLEX1,
+                             line=dict(width=0), hovertemplate="%{y:.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=plot_df["hour"], y=plot_df["flex2_jobs"], stackgroup="one",
+                             name="Flex 2", fillcolor=COLOR_FLEX2,
+                             line=dict(width=0), hovertemplate="%{y:.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=plot_df["hour"], y=plot_df["flex3_jobs"], stackgroup="one",
+                             name="Flex 3", fillcolor=COLOR_FLEX3,
+                             line=dict(width=0), hovertemplate="%{y:.0f}<extra></extra>"))
+    apply_layout(fig, height=260, yaxis_title="Active jobs",
+                 xaxis_title="Hours (first 7 days)")
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown(
+        "Because 7 days is insufficient to train deep sequence models, we **augment with "
+        "30 days of synthetic data** calibrated to the real distribution: daily/weekly "
+        "seasonality, flex-class ratios, job-arrival spike statistics. Synthetic data is "
+        "used for sequence-model training only; real data drives workload characterization "
+        "and the scheduler's structural assumptions."
+    )
+
+    # ─── 3. Forecasting models ───────────────────────────────────────────────
+    st.markdown("## 3. Forecasting Models")
+    st.markdown(
+        "We trained **seven forecasters** to predict cluster deferrable capacity (in MW) "
+        "4 hours ahead at 15-minute resolution, using lag features, rolling statistics, "
+        "and calendar variables. Train/test split is the last 20% of the 30-day window, "
+        "preserving temporal order."
+    )
+
+    # Static results table
+    st.markdown(
+        '<table class="mtd-stat-table">'
+        '<tr><th>Model</th><th>MAE (MW)</th><th>RMSE (MW)</th><th>MAPE</th><th>Notes</th></tr>'
+        '<tr><td>Persistence</td><td>0.0885</td><td>0.1104</td><td>20.5%</td><td>Predict last observed value</td></tr>'
+        '<tr><td>Linear Regression</td><td>0.0539</td><td>0.0715</td><td>12.2%</td><td>Lag + calendar features</td></tr>'
+        '<tr class="best"><td>Gradient Boosting</td><td>0.0448</td><td>0.0607</td><td>10.0%</td><td>Deployed in production</td></tr>'
+        '<tr><td>LSTM v1 (50 ep)</td><td>0.0468</td><td>0.0636</td><td>10.5%</td><td>2 layers, 64 hidden, lookback 96</td></tr>'
+        '<tr><td>LSTM v2 (100 ep + LR sched)</td><td>0.0515</td><td>0.0706</td><td>11.7%</td><td>ReduceLROnPlateau</td></tr>'
+        '<tr><td>TCN</td><td>0.0500</td><td>0.0676</td><td>11.5%</td><td>Train loss 0.0006 — overfit</td></tr>'
+        '<tr><td>Quantile LSTM (q50)</td><td>0.0512</td><td>—</td><td>—</td><td>Pinball loss, 80% interval target</td></tr>'
+        '</table>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "**Interactive comparison.** Select models to overlay their predictions on the "
+        "synthetic test window. Persistence, Linear, and GBM are computed live from the "
+        "deployed scaler + model. Deep models (LSTM / TCN / Quantile LSTM) are summarized "
+        "in the table above; their test-set predictions can be added by running the "
+        "training pipeline on Colab and bundling `model_predictions.csv` into `/data`."
+    )
+    selected = st.multiselect(
+        "Models",
+        ["Gradient Boosting (deployed)", "Persistence", "Linear Regression"],
+        default=["Gradient Boosting (deployed)", "Persistence"],
+        label_visibility="collapsed",
+    )
+    preds = _compute_test_predictions()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=preds["hours"], y=preds["actual"],
+                             mode="lines", line=dict(color=COLOR_INK, width=1.5),
+                             name="Actual", hovertemplate="%{y:.3f} MW<extra></extra>"))
+    style_map = {
+        "Gradient Boosting (deployed)": (COLOR_ACCENT, "solid", "gbm"),
+        "Persistence":                  (COLOR_MUTED, "dot",   "persistence"),
+        "Linear Regression":            ("#94a3b8",   "dash",  "linear"),
+    }
+    for label in selected:
+        color, dash, key = style_map[label]
+        fig.add_trace(go.Scatter(x=preds["hours"], y=preds[key],
+                                 mode="lines", line=dict(color=color, width=1.4, dash=dash),
+                                 name=label, hovertemplate="%{y:.3f} MW<extra></extra>"))
+    apply_layout(fig, height=320, yaxis_title="Flex capacity (MW)",
+                 xaxis_title="Hours into test window")
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown(
+        "We hypothesized that deep sequence models would outperform classical methods on "
+        "this temporal task. Empirically, **Gradient Boosting with hand-crafted lag features "
+        "achieves the lowest MAE (0.0448 MW)** — narrowly beating both LSTM variants and TCN. "
+        "We attribute this to (a) the limited training data (2,880 samples after synthetic "
+        "augmentation), and (b) the dominant calendar periodicity that gradient boosting "
+        "captures efficiently. TCN's training loss is 4× lower than LSTM's, but its test MAE "
+        "is worse — a classic overfitting signature on a small dataset."
+    )
+
+    # ─── 4. Feature importance ───────────────────────────────────────────────
+    st.markdown("## 4. What Drives the Forecast")
+
+    importances = gbr.feature_importances_
+    idx = np.argsort(importances)[::-1]
+    sorted_feat = [feature_cols[i] for i in idx]
+    sorted_imp  = importances[idx]
+    name_map = {
+        "flexible_mw_lag1": "flex_mw lag-1 (15 min)",
+        "flexible_mw_lag4": "flex_mw lag-4 (1 hr)",
+        "flexible_mw_lag8": "flex_mw lag-8 (2 hr)",
+        "flexible_mw_lag32": "flex_mw lag-32 (8 hr)",
+        "flexible_mw_lag96": "flex_mw lag-96 (24 hr)",
+        "flexible_mw_roll4_mean": "flex_mw roll mean 1hr",
+        "flexible_mw_roll4_std": "flex_mw roll std 1hr",
+        "flexible_mw_roll96_mean": "flex_mw roll mean 24hr",
+        "total_jobs_lag1": "total_jobs lag-1",
+        "total_jobs_lag4": "total_jobs lag-4",
+        "total_jobs_lag8": "total_jobs lag-8",
+        "total_jobs_lag32": "total_jobs lag-32",
+        "total_jobs_lag96": "total_jobs lag-96",
+        "hour_of_day": "hour of day",
+        "day_of_week": "day of week",
+        "is_business_hours": "business hours flag",
+        "job_arrival": "job arrival rate",
+        "job_completion": "job completion rate",
+        "flex3_ratio": "flex3 ratio",
+        "flex2_ratio": "flex2 ratio",
+        "total_jobs": "total active jobs",
+    }
+    display_names = [name_map.get(f, f) for f in sorted_feat]
+    fig = go.Figure(go.Bar(
+        x=sorted_imp, y=display_names, orientation="h",
+        marker_color=COLOR_ACCENT, hovertemplate="%{x:.3f}<extra></extra>",
+    ))
+    fig.update_yaxes(autorange="reversed")
+    apply_layout(fig, height=480, xaxis_title="Gini importance", yaxis_title="")
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown(
+        "Calendar features alone account for **77% of the GBM's predictive power** "
+        "(`hour_of_day`: 60%, `day_of_week`: 17%). Lag and rolling statistics add an "
+        "incremental ~8%; flex composition ratios contribute the rest. This finding "
+        "explains why LSTM and TCN close the gap with GBM despite the data scarcity — "
+        "both learn the same daily / weekly periodicity, one through explicit features, "
+        "the other from the raw sequence. **Deep models become advantageous when** "
+        "(a) longer traces are available, (b) raw sequences replace feature engineering, "
+        "or (c) uncertainty estimates are required for risk-aware dispatch."
+    )
+
+    # ─── 5. Uncertainty quantification ───────────────────────────────────────
+    st.markdown("## 5. Uncertainty Quantification")
+    st.markdown(
+        "Cost-aware dispatch is asymmetric: under-prediction of capacity is more costly "
+        "(deferred jobs miss their cheap window) than over-prediction. We trained a "
+        "**Quantile LSTM** with the pinball loss at the 10th, 50th, and 90th percentiles "
+        "to produce calibrated prediction intervals."
+    )
+    qa, qb, qc = st.columns(3)
+    with qa: kpi_card("Empirical coverage", "58.5%", "vs 80% target",
+                      delta="overconfident", delta_pos=False)
+    with qb: kpi_card("MAE (q50)", "0.0512", "MW")
+    with qc: kpi_card("Avg interval width", "0.107", "MW")
+    st.markdown(
+        "Coverage on the test window is **58.5% against the 80% target** — the model is "
+        "overconfident. Inspection of the prediction plot (not shown here; see "
+        "`analysis.ipynb`) reveals that failures concentrate at sudden load spikes — "
+        "burst job submissions that violate the smooth daily pattern. The current "
+        "Quantile LSTM is unfit for risk-critical dispatch; future work is to condition "
+        "interval width on recent volatility (e.g., rolling std as an additional feature) "
+        "or to apply post-hoc conformal calibration."
+    )
+
+    # ─── 6. From prediction to dispatch ──────────────────────────────────────
+    st.markdown("## 6. From Prediction to Dispatch")
+    st.markdown(
+        "We simulate a **greedy carbon- and cost-aware scheduler** over the synthetic "
+        "test window. At each 15-minute bin, the scheduler pulls the GBM 8-hour forecast, "
+        "identifies bins where current power exceeds the 75th percentile threshold (peak), "
+        "and defers a fraction of Flex 2 / 3 jobs from peak to predicted off-peak windows, "
+        "with a $5,000/MW penalty for any window overlapping a 4CP candidate bin."
+    )
+    da, db, dc = st.columns(3)
+    with da: kpi_card("Peak power reduction", "18.7%", "MW (-0.27)", delta="0.27 MW avg drop", delta_pos=True)
+    with db: kpi_card("Energy shifted", "9.4", "MW·h from peak")
+    with dc: kpi_card("Deferral events", "160", "over 138 hours")
+    st.markdown(
+        "Maximum *instantaneous* power increased (1.72 MW → 2.02 MW) because deferred jobs "
+        "cluster into the same off-peak window — a known peak-shifting side effect, "
+        "addressable in Phase 2 with capacity-aware MILP scheduling that explicitly limits "
+        "simultaneous starts per bin."
+    )
+
+    # ─── 7. Limitations & roadmap ────────────────────────────────────────────
+    st.markdown("## 7. Limitations & Roadmap")
+    st.markdown(
+        "We deploy **GBM** (not the deep models) in the application because of "
+        "(a) interpretability, (b) sub-millisecond inference, and (c) robustness under "
+        "data scarcity. The Quantile LSTM is retained as a research artifact for future "
+        "uncertainty-aware extensions.\n\n"
+        "**Known limitations:**"
+    )
+    st.markdown(
+        "- **Synthetic data extension.** 7 days of real Alibaba data were augmented to 30 days. "
+        "Deep-model results carry the calibration assumptions; cross-validation on additional "
+        "real traces is needed before stronger empirical claims.\n"
+        "- **LMP is synthetic-but-calibrated** to ERCOT 2023 distributional statistics, not live. "
+        "Production deployment requires integration with ERCOT's MIS / EMP6 endpoints "
+        "(or a gridstatus.io wrapper).\n"
+        "- **No demand response market access.** DR revenue requires Qualified Scheduling Entity "
+        "(QSE) relationships and multi-quarter procurement; the savings shown here represent only "
+        "energy arbitrage + 4CP avoidance.\n"
+        "- **Greedy scheduling, not optimal.** Phase 2 replaces the greedy heuristic with a "
+        "MILP formulation (PuLP / CVXPY / Gurobi) for cluster-wide global optimization across "
+        "multiple campuses, capacity constraints, and inter-job dependencies."
+    )
+
+    # ─── References ──────────────────────────────────────────────────────────
+    st.markdown("## References")
+    st.markdown(
+        '<div class="mtd-citation">[1] Q. Weng et al., "MLaaS in the Wild: Workload Analysis '
+        'and Scheduling in Large-Scale Heterogeneous GPU Clusters," <em>NSDI</em>, 2022.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="mtd-citation">[2] A. Radovanović et al., "Carbon-Aware Computing for '
+        'Datacenters," <em>IEEE Transactions on Power Systems</em>, 2023.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="mtd-citation">[3] ERCOT, "Nodal Protocols Section 4: Scheduling, '
+        'Operations Planning and Reliability Unit Commitment," 2024.</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Footer ──────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.caption(
+        "Data: Alibaba PAI GPU cluster (2020) · ERCOT 2023-calibrated LMP & carbon intensity · "
+        "Forecaster: Gradient Boosting Regressor · Scheduler: greedy with 4CP penalty"
+    )
+    st.stop()
 
 # ── Compute forecast and current-bin metrics ─────────────────────────────────
 forecast = predict_horizon(nb, N_FORECAST)
