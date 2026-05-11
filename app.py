@@ -1,7 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-import io, time
+import io
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -202,8 +202,8 @@ def apply_layout(fig, **overrides):
 MAX_BIN = len(ts) - N_FORECAST - 10
 if "now_bin" not in st.session_state:
     st.session_state.now_bin = 1440
-if "playing" not in st.session_state:
-    st.session_state.playing = False
+if "advisor_result" not in st.session_state:
+    st.session_state.advisor_result = None
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.markdown("### DC Workload Scheduler")
@@ -222,8 +222,7 @@ now_bin = st.sidebar.slider(
     "Bin index", min_value=120, max_value=MAX_BIN,
     value=st.session_state.now_bin, step=1, label_visibility="collapsed",
 )
-# Only update from slider if not playing
-if not st.session_state.playing and now_bin != st.session_state.now_bin:
+if now_bin != st.session_state.now_bin:
     st.session_state.now_bin = now_bin
 nb = st.session_state.now_bin
 
@@ -232,15 +231,9 @@ day = int(now_hour // 24) + 1
 hhmm = f"{int(now_hour % 24):02d}:{int((now_hour % 1) * 60):02d}"
 st.sidebar.markdown(f"**Day {day}, {hhmm}**")
 
-# Play controls
-ctl1, ctl2, ctl3 = st.sidebar.columns([1, 1, 1])
-if ctl1.button("Pause" if st.session_state.playing else "Play", use_container_width=True):
-    st.session_state.playing = not st.session_state.playing
-if ctl2.button("Reset", use_container_width=True):
+if st.sidebar.button("Reset to default", use_container_width=True):
     st.session_state.now_bin = 1440
-    st.session_state.playing = False
-speed = ctl3.selectbox("Speed", [1, 4, 16, 60], index=2, label_visibility="collapsed",
-                       format_func=lambda x: f"{x}x")
+    st.rerun()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("GPU Cluster Scheduler")
@@ -297,14 +290,6 @@ with g4:
 
 st.markdown("---")
 
-# ── Auto-advance ──────────────────────────────────────────────────────────────
-if st.session_state.playing:
-    st.session_state.now_bin = min(nb + speed, MAX_BIN)
-    if st.session_state.now_bin >= MAX_BIN:
-        st.session_state.playing = False
-    time.sleep(0.25)
-    st.rerun()
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADVISOR MODE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -322,119 +307,134 @@ if mode.startswith("Advisor"):
             horizontal=True, index=1,
         )
 
-    flex_level   = int(flex_type[5])
-    duration_bins = max(1, int(np.ceil(duration_hr * 60 / BIN_MIN)))
-    job_mw       = gpu_count * (P_MAX - P_IDLE) / 1e6
-    max_defer    = {1: 0, 2: 8, 3: 32}[flex_level]
+    run_opt = st.button("Optimize submission window", type="primary")
 
-    # Compute recommendation
-    N_FC = len(forecast)
-    candidate_starts = np.arange(0, min(max_defer, N_FC - 1) + 1)
-    costs, carbs, loads = [], [], []
-    for s in candidate_starts:
-        end = min(s + duration_bins, N_FC)
-        costs.append(job_mw * fc_lmp[s:end].sum() * (BIN_MIN / 60))
-        carbs.append(job_mw * 1000 * fc_carb[s:end].sum() * (BIN_MIN / 60) / 1e6)  # tonnes
-        loads.append(forecast[s:end].mean())
-    costs, carbs, loads = np.array(costs), np.array(carbs), np.array(loads)
+    if run_opt:
+        flex_level    = int(flex_type[5])
+        duration_bins = max(1, int(np.ceil(duration_hr * 60 / BIN_MIN)))
+        job_mw        = gpu_count * (P_MAX - P_IDLE) / 1e6
+        max_defer     = {1: 0, 2: 8, 3: 32}[flex_level]
 
-    if len(costs) == 0:
-        best_step = 0
+        N_FC = len(forecast)
+        candidate_starts = np.arange(0, min(max_defer, N_FC - 1) + 1)
+        costs, carbs = [], []
+        for s in candidate_starts:
+            end = min(s + duration_bins, N_FC)
+            costs.append(job_mw * fc_lmp[s:end].sum() * (BIN_MIN / 60))
+            carbs.append(job_mw * 1000 * fc_carb[s:end].sum() * (BIN_MIN / 60) / 1e6)
+        costs, carbs = np.array(costs), np.array(carbs)
+        best_step = 0 if len(costs) == 0 else int(candidate_starts[np.argmin(costs)])
+        best_delay = best_step * BIN_MIN
+        now_end    = min(duration_bins, N_FC)
+        best_end   = min(best_step + duration_bins, N_FC)
+        now_cost   = float(job_mw * fc_lmp[0:now_end].sum() * (BIN_MIN / 60))
+        best_cost  = float(costs[best_step]) if len(costs) > best_step else now_cost
+        now_carb   = float(job_mw * 1000 * fc_carb[0:now_end].sum() * (BIN_MIN / 60) / 1e6)
+        best_carb  = float(carbs[best_step]) if len(carbs) > best_step else now_carb
+
+        target_h   = (now_hour + best_delay / 60) % 24
+        target_str = f"Day {day}, {int(target_h):02d}:{int((target_h % 1) * 60):02d}"
+
+        st.session_state.advisor_result = dict(
+            snapshot_day=day, snapshot_hhmm=hhmm,
+            gpus=gpu_count, duration_hr=duration_hr, flex_label=flex_type.split(" — ")[0],
+            best_step=best_step, best_delay=best_delay, target_str=target_str,
+            now_end=now_end, best_end=best_end,
+            now_cost=now_cost, best_cost=best_cost,
+            now_carb=now_carb, best_carb=best_carb,
+            now_bin=nb, fc_lmp=fc_lmp, fc_4cp=fc_4cp, fc_carb=fc_carb,
+            forecast=forecast, forecast_lo=forecast_lo, forecast_hi=forecast_hi,
+            hist_start=hist_start, now_hour=now_hour,
+        )
+
+    result = st.session_state.advisor_result
+    if result is None:
+        st.info("Set job parameters and click **Optimize submission window** to compute a recommendation.")
     else:
-        best_step = int(candidate_starts[np.argmin(costs)])
+        r = result
+        cost_save = r["now_cost"] - r["best_cost"]
+        carb_save = r["now_carb"] - r["best_carb"]
+        rec_label = "Submit now" if r["best_step"] == 0 else f"Defer {r['best_delay']} min · start {r['target_str']}"
 
-    best_delay = best_step * BIN_MIN
-    now_end    = min(duration_bins, N_FC)
-    best_end   = min(best_step + duration_bins, N_FC)
-    now_cost   = float(job_mw * fc_lmp[0:now_end].sum() * (BIN_MIN / 60))
-    best_cost  = float(costs[best_step]) if len(costs) > best_step else now_cost
-    now_carb   = float(job_mw * 1000 * fc_carb[0:now_end].sum() * (BIN_MIN / 60) / 1e6)
-    best_carb  = float(carbs[best_step]) if len(carbs) > best_step else now_carb
-    cost_save  = now_cost - best_cost
-    carb_save  = now_carb - best_carb
+        st.markdown("### Recommendation")
+        st.caption(
+            f"Computed at Day {r['snapshot_day']}, {r['snapshot_hhmm']} · "
+            f"{r['gpus']} GPUs · {r['duration_hr']:.1f} hr · {r['flex_label']}"
+        )
 
-    target_h   = (now_hour + best_delay / 60) % 24
-    target_str = f"Day {day}, {int(target_h):02d}:{int((target_h % 1) * 60):02d}"
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: kpi_card("Action", rec_label, "")
+        with c2: kpi_card("Energy cost", f"${r['best_cost']:,.2f}",
+                          delta=f"saves ${cost_save:,.2f}" if cost_save > 0.01 else None, delta_pos=True)
+        with c3: kpi_card("CO₂ emitted", f"{r['best_carb']*1000:,.1f}", "kg",
+                          delta=f"saves {carb_save*1000:.1f} kg" if carb_save > 0.01 else None, delta_pos=True)
+        with c4: kpi_card("4CP exposure",
+                          f"{int(r['fc_4cp'][r['best_step']:r['best_end']].sum())}/"
+                          f"{int(r['fc_4cp'][:r['now_end']].sum())}",
+                          "bins (best / now)")
 
-    st.markdown("### Recommendation")
-    rec_label = "Submit now" if best_step == 0 else f"Defer {best_delay} min · start {target_str}"
+        st.markdown("")
+        col_left, col_right = st.columns(2)
 
-    r1, r2, r3, r4 = st.columns(4)
-    with r1: kpi_card("Action", rec_label, "")
-    with r2: kpi_card("Energy cost",  f"${best_cost:,.2f}",
-                      delta=f"saves ${cost_save:,.2f}" if cost_save > 0.01 else None, delta_pos=True)
-    with r3: kpi_card("CO₂ emitted",  f"{best_carb*1000:,.1f}", "kg",
-                      delta=f"saves {carb_save*1000:.1f} kg" if carb_save > 0.01 else None, delta_pos=True)
-    with r4: kpi_card("4CP exposure", f"{int(fc_4cp[best_step:best_end].sum())}/{int(fc_4cp[:now_end].sum())}",
-                      "bins (best / now)")
+        # ── Left: Flex capacity forecast ────────────────────────────────────
+        with col_left:
+            st.markdown("### Cluster flex-capacity forecast")
+            hist = ts.iloc[r["hist_start"]:r["now_bin"]+1]
+            hist_h = hist["hour"].values - r["now_hour"]
 
-    st.markdown("")
-    col_left, col_right = st.columns(2)
-
-    # ── Left: Flex capacity forecast ────────────────────────────────────────
-    with col_left:
-        st.markdown("### Cluster flex-capacity forecast")
-        hist = ts.iloc[hist_start:nb+1]
-        hist_h = hist["hour"].values - now_hour
-        hist_lmp_v = lmp_df["lmp_usd_mwh"].iloc[hist_start:nb+1].values
-
-        fig = go.Figure()
-        # Confidence interval (drawn first as background)
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([forecast_hours, forecast_hours[::-1]]),
-            y=np.concatenate([forecast_hi, forecast_lo[::-1]]),
-            fill="toself", fillcolor="rgba(37, 99, 235, 0.12)",
-            line=dict(width=0), hoverinfo="skip", showlegend=False, name="80% interval",
-        ))
-        fig.add_trace(go.Scatter(
-            x=hist_h, y=hist["flexible_mw"].values,
-            mode="lines", line=dict(color=COLOR_INK, width=1.5),
-            name="Historical", hovertemplate="%{y:.3f} MW<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=forecast_hours, y=forecast,
-            mode="lines", line=dict(color=COLOR_ACCENT, width=2, dash="dash"),
-            name="Forecast", hovertemplate="%{y:.3f} MW<extra></extra>",
-        ))
-        # Now line
-        fig.add_vline(x=0, line_width=1, line_dash="dot", line_color=COLOR_MUTED)
-        apply_layout(fig, height=320,
-                     yaxis_title="Flex capacity (MW)",
-                     xaxis_title="Hours from now",
-                     xaxis=dict(range=[-24, 8]))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    # ── Right: LMP forecast with windows ────────────────────────────────────
-    with col_right:
-        st.markdown("### LMP forecast — submission windows")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=forecast_hours, y=fc_lmp,
-            mode="lines", line=dict(color=COLOR_INK, width=1.5),
-            name="LMP", hovertemplate="$%{y:.2f}/MWh<extra></extra>",
-        ))
-        # 4CP markers
-        cp_x = forecast_hours[fc_4cp]
-        if len(cp_x) > 0:
+            fig = go.Figure()
             fig.add_trace(go.Scatter(
-                x=cp_x, y=fc_lmp[fc_4cp],
-                mode="markers", marker=dict(color=COLOR_ACCENT, size=10, symbol="diamond-open"),
-                name="4CP", hovertemplate="4CP candidate<extra></extra>",
+                x=np.concatenate([forecast_hours, forecast_hours[::-1]]),
+                y=np.concatenate([r["forecast_hi"], r["forecast_lo"][::-1]]),
+                fill="toself", fillcolor="rgba(37, 99, 235, 0.12)",
+                line=dict(width=0), hoverinfo="skip", showlegend=False,
             ))
-        # Now-submit window (light shade)
-        fig.add_vrect(x0=0, x1=forecast_hours[now_end - 1],
-                      fillcolor=COLOR_MUTED, opacity=0.12, line_width=0,
-                      annotation_text="if now", annotation_position="top left",
-                      annotation_font_size=10, annotation_font_color=COLOR_MUTED)
-        # Deferred window (dark blue shade)
-        if best_step > 0:
-            fig.add_vrect(x0=forecast_hours[best_step], x1=forecast_hours[best_end - 1],
-                          fillcolor=COLOR_ACCENT, opacity=0.18, line_width=0,
-                          annotation_text="recommended", annotation_position="top right",
-                          annotation_font_size=10, annotation_font_color=COLOR_ACCENT)
-        apply_layout(fig, height=320,
-                     yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            fig.add_trace(go.Scatter(
+                x=hist_h, y=hist["flexible_mw"].values,
+                mode="lines", line=dict(color=COLOR_INK, width=1.5),
+                name="Historical", hovertemplate="%{y:.3f} MW<extra></extra>",
+            ))
+            fig.add_trace(go.Scatter(
+                x=forecast_hours, y=r["forecast"],
+                mode="lines", line=dict(color=COLOR_ACCENT, width=2, dash="dash"),
+                name="Forecast", hovertemplate="%{y:.3f} MW<extra></extra>",
+            ))
+            fig.add_vline(x=0, line_width=1, line_dash="dot", line_color=COLOR_MUTED)
+            apply_layout(fig, height=320,
+                         yaxis_title="Flex capacity (MW)",
+                         xaxis_title="Hours from now",
+                         xaxis=dict(range=[-24, 8]))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Right: LMP forecast with windows ────────────────────────────────
+        with col_right:
+            st.markdown("### LMP forecast — submission windows")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=forecast_hours, y=r["fc_lmp"],
+                mode="lines", line=dict(color=COLOR_INK, width=1.5),
+                name="LMP", hovertemplate="$%{y:.2f}/MWh<extra></extra>",
+            ))
+            cp_mask = r["fc_4cp"]
+            if cp_mask.any():
+                fig.add_trace(go.Scatter(
+                    x=forecast_hours[cp_mask], y=r["fc_lmp"][cp_mask],
+                    mode="markers", marker=dict(color=COLOR_ACCENT, size=10, symbol="diamond-open"),
+                    name="4CP", hovertemplate="4CP candidate<extra></extra>",
+                ))
+            fig.add_vrect(x0=0, x1=forecast_hours[r["now_end"] - 1],
+                          fillcolor=COLOR_MUTED, opacity=0.12, line_width=0,
+                          annotation_text="if now", annotation_position="top left",
+                          annotation_font_size=10, annotation_font_color=COLOR_MUTED)
+            if r["best_step"] > 0:
+                fig.add_vrect(x0=forecast_hours[r["best_step"]],
+                              x1=forecast_hours[r["best_end"] - 1],
+                              fillcolor=COLOR_ACCENT, opacity=0.18, line_width=0,
+                              annotation_text="recommended", annotation_position="top right",
+                              annotation_font_size=10, annotation_font_color=COLOR_ACCENT)
+            apply_layout(fig, height=320,
+                         yaxis_title="LMP ($/MWh)", xaxis_title="Hours from now")
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PLANNER MODE
