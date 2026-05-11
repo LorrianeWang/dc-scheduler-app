@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -51,34 +54,44 @@ def build_features(ts_window: pd.DataFrame) -> pd.DataFrame:
     return df.dropna()
 
 def predict_horizon(now_bin: int, n_steps: int = 32) -> np.ndarray:
-    """Predict flexible_mw for the next n_steps bins from now_bin."""
-    # Need enough history for lag-96
-    history_start = max(0, now_bin - 120)
-    window = ts.iloc[history_start : now_bin + 1].copy()
-    feats  = build_features(window)
-    if len(feats) == 0:
-        return np.full(n_steps, np.nan)
-    last_row = feats.iloc[[-1]][feature_cols]
-    last_scaled = scaler.transform(last_row)
-    # Single-step prediction; repeat with a rolling stub for multi-step
+    """Predict flexible_mw for the next n_steps bins from now_bin.
+
+    Keeps a raw-column buffer (only original ts columns) and rebuilds
+    features fresh each step — avoids passing engineered rows back into
+    build_features which breaks lag/rolling computations.
+    """
+    RAW_COLS = ["time_bin", "hour", "total_jobs", "flex1_jobs",
+                "flex2_jobs", "flex3_jobs", "power_mw", "flexible_mw"]
+
+    # Need at least 96 rows of history for lag-96
+    history_start = max(0, now_bin - 110)
+    raw_buf = ts.iloc[history_start : now_bin + 1][RAW_COLS].copy().reset_index(drop=True)
+
     preds = []
-    stub  = feats.copy()
     for step in range(n_steps):
-        row    = stub.iloc[[-1]][feature_cols]
+        feats = build_features(raw_buf)
+        if len(feats) == 0:
+            preds.append(float(ts["flexible_mw"].iloc[now_bin]))
+            continue
+
+        row    = feats.iloc[[-1]][feature_cols]
         scaled = scaler.transform(row)
         pred   = float(gbr.predict(scaled)[0])
         preds.append(pred)
-        # Append predicted row to stub so next iteration has updated lags
+
+        # Build next raw row — use real ts values if available, else carry forward
         next_bin = now_bin + step + 1
         if next_bin < len(ts):
-            next_row = ts.iloc[[next_bin]].copy()
+            next_raw = ts.iloc[[next_bin]][RAW_COLS].copy()
         else:
-            next_row = stub.iloc[[-1]].copy()
-            next_row["time_bin"] = next_bin
-            next_row["hour"]     = next_bin * BIN_MIN / 60
-        next_row["flexible_mw"] = pred
-        stub = pd.concat([stub, next_row], ignore_index=True)
-        stub = build_features(stub)
+            next_raw = raw_buf.iloc[[-1]][RAW_COLS].copy()
+            next_raw["time_bin"] = next_bin
+            next_raw["hour"]     = next_bin * BIN_MIN / 60
+
+        next_raw = next_raw.copy()
+        next_raw["flexible_mw"] = pred
+        raw_buf = pd.concat([raw_buf, next_raw], ignore_index=True)
+
     return np.array(preds)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
