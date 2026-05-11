@@ -36,9 +36,18 @@ _CSS = """
       color: #0f172a;
   }
   #MainMenu, footer {visibility: hidden;}
-  /* Hide the run/stop/share toolbar but keep the header (so the sidebar collapse arrow stays clickable) */
-  [data-testid="stToolbar"] {display: none;}
+  /* Hide the run/stop/share toolbar but keep the sidebar collapse arrow */
+  [data-testid="stToolbar"] {display: none !important;}
   [data-testid="stHeader"] {background: transparent;}
+  /* Force the collapsed-sidebar toggle to stay visible — without this it can
+     disappear once the user collapses the sidebar on Streamlit Cloud */
+  [data-testid="collapsedControl"] {
+      visibility: visible !important;
+      display: block !important;
+      opacity: 1 !important;
+      z-index: 999 !important;
+  }
+  [data-testid="stSidebarCollapseButton"] {visibility: visible !important;}
   .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1500px;}
 
   h1 {font-size: 28px !important; font-weight: 700; letter-spacing: -0.02em; color: #0f172a;}
